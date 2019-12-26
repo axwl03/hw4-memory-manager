@@ -20,9 +20,21 @@ struct entry
     int index;
     TAILQ_ENTRY(entry) entries;
 };
+TAILQ_HEAD(ESCA_head, ESCA_entry);
+struct ESCA_entry
+{
+    int VPI;
+    bool ref;
+    bool dirty;
+    TAILQ_ENTRY(ESCA_entry) ESCA_entries;
+};
+
 
 bool readline(char *str, int size);
 void FIFO();
+void ESCA();
+int ESCA_evicted_find(struct ESCA_head *ESCA_table_p);
+void SLRU();
 
 int vacant_DPI(); // return smallest vacant DPI
 
@@ -44,17 +56,11 @@ int main()
 
     /* trace */
     if(strcmp(policy, "FIFO") == 0)
-    {
         FIFO();
-    }
     else if(strcmp(policy, "ESCA") == 0)
-    {
-
-    }
+        ESCA();
     else if(strcmp(policy, "SLRU") == 0)
-    {
-
-    }
+        SLRU();
     else
     {
         printf("unrecognized policy\n");
@@ -161,6 +167,151 @@ void FIFO()
           fprintf(stderr, "%d\n", n2->index);*/
     }
     printf("Page Fault Rate: %.3f\n", (float)miss/count);
+}
+void ESCA()
+{
+    struct ESCA_head ESCA_table;
+    TAILQ_INIT(&ESCA_table);
+    char input[20], method[10];
+    int VPI, DPI_d, DPI_s, evicted_VPI, in_use_PF[PF_size], count = 0, miss = 0, i;
+    struct ESCA_entry *n;
+    for(i = 0; i < PF_size; ++i)
+        in_use_PF[i] = -1;  // not used
+
+    while(readline(input, 20))
+    {
+        if(sscanf(input, "%9s %d", method, &VPI))
+        {
+            count++;
+            if(page_table[VPI].in_use == 0) // first time
+            {
+                page_table[VPI].in_use = 1;
+                for(i = 0; i < PF_size; ++i)    // has vacant slot
+                {
+                    if(in_use_PF[i] == -1)
+                    {
+                        page_table[VPI].present = 1;
+                        page_table[VPI].index = i;
+                        in_use_PF[i] = VPI;
+                        printf("Miss, %d, -1>>-1, %d<<-1\n", i, VPI);
+                        n = malloc(sizeof(struct ESCA_entry));
+                        if(n == NULL)
+                        {
+                            fprintf(stderr, "malloc error\n");
+                            exit(1);
+                        }
+                        n->VPI = VPI;
+                        n->ref = 1;
+                        if(strcmp(method, "Write") == 0)
+                            n->dirty = 1;
+                        else n->dirty = 0;
+                        TAILQ_INSERT_TAIL(&ESCA_table, n, ESCA_entries);
+                        break;
+                    }
+                }
+                if(page_table[VPI].present == 0)    // physical memory full
+                {
+                    evicted_VPI = ESCA_evicted_find(&ESCA_table);
+                    page_table[VPI].present = 1;
+                    page_table[VPI].index = page_table[evicted_VPI].index;
+                    DPI_d = vacant_DPI();
+                    page_table[evicted_VPI].present = 0;
+                    page_table[evicted_VPI].index = DPI_d;
+                    for(n = ESCA_table.tqh_first; n != NULL; n = n->ESCA_entries.tqe_next)
+                    {
+                        if(n->VPI == evicted_VPI)
+                        {
+                            n->VPI = VPI;
+                            n->ref = 1;
+                            if(strcmp(method, "Write") == 0)
+                                n->dirty = 1;
+                            else n->dirty = 0;
+                            break;
+                        }
+                    }
+                    in_use_PF[page_table[VPI].index] = VPI;
+                    printf("Miss, %d, %d>>%d, %d<<-1\n", page_table[VPI].index, evicted_VPI, DPI_d, VPI);
+                }
+                miss++;
+            }
+            else    // not first time
+            {
+                if(page_table[VPI].present == 1)   // present
+                {
+                    for(n = ESCA_table.tqh_first; n != NULL; n = n->ESCA_entries.tqe_next)
+                    {
+                        if(n->VPI == VPI)
+                        {
+                            n->ref = 1;
+                            if(strcmp(method, "Write") == 0)
+                                n->dirty = 1;
+                            else n->dirty = 0;
+                            break;
+                        }
+                    }
+                    printf("Hit, %d=>%d\n", VPI, page_table[VPI].index);
+                }
+                else    // not present
+                {
+                    evicted_VPI = ESCA_evicted_find(&ESCA_table);
+                    DPI_s = page_table[VPI].index;
+                    DPI_d = vacant_DPI();
+                    page_table[VPI].present = 1;
+                    page_table[VPI].index = page_table[evicted_VPI].index;
+                    page_table[evicted_VPI].present = 0;
+                    page_table[evicted_VPI].index = DPI_d;
+                    for(n = ESCA_table.tqh_first; n != NULL; n = n->ESCA_entries.tqe_next)
+                    {
+                        if(n->VPI == evicted_VPI)
+                        {
+                            n->VPI = VPI;
+                            n->ref = 1;
+                            if(strcmp(method, "Write") == 0)
+                                n->dirty = 1;
+                            else n->dirty = 0;
+                            break;
+                        }
+                    }
+                    in_use_PF[page_table[VPI].index] = VPI;
+                    printf("Miss, %d, %d>>%d, %d<<%d\n", page_table[VPI].index, evicted_VPI, DPI_d, VPI, DPI_s);
+                    miss++;
+                }
+            }
+        }
+        // print page table and queuehead
+        fprintf(stderr, "\npage table:\n");
+        for(int j = 0; j < VP_size; j++)
+        {
+            fprintf(stderr, "%d: %d %d %d\n", j, page_table[j].index, page_table[j].in_use, page_table[j].present);
+        }
+        fprintf(stderr, "ESCA queue:\n");
+        for(struct ESCA_entry *n2 = ESCA_table.tqh_first; n2 != NULL; n2 = n2->ESCA_entries.tqe_next)
+            fprintf(stderr, "%d: %d %d\n", n2->VPI, n2->ref, n2->dirty);
+    }
+    printf("Page Fault Rate: %.3f\n", (float)miss/count);
+}
+int ESCA_evicted_find(struct ESCA_head *ESCA_table_p)
+{
+    struct ESCA_entry *n;
+    for(int i = 0; i < 2; ++i)
+    {
+        for(n = ESCA_table_p->tqh_first; n != NULL; n = n->ESCA_entries.tqe_next)
+        {
+            if(n->ref == 0 && n->dirty == 0)
+                return n->VPI;
+        }
+        for(n = ESCA_table_p->tqh_first; n != NULL; n = n->ESCA_entries.tqe_next)
+        {
+            if(n->ref == 0 && n->dirty == 1)
+                return n->VPI;
+            n->ref = 0;
+        }
+    }
+    return -1;  // error occured
+}
+void SLRU()
+{
+
 }
 int vacant_DPI()
 {
