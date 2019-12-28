@@ -20,13 +20,13 @@ struct entry
     int index;
     TAILQ_ENTRY(entry) entries;
 };
-TAILQ_HEAD(ESCA_head, ESCA_entry);
+CIRCLEQ_HEAD(ESCA_head, ESCA_entry);
 struct ESCA_entry
 {
     int VPI;
     bool ref;
     bool dirty;
-    TAILQ_ENTRY(ESCA_entry) ESCA_entries;
+    CIRCLEQ_ENTRY(ESCA_entry) ESCA_entries;
 };
 TAILQ_HEAD(SLRU_head, SLRU_entry);
 struct SLRU_entry
@@ -39,7 +39,7 @@ struct SLRU_entry
 bool readline(char *str, int size);
 void FIFO();
 void ESCA();
-int ESCA_evicted_find(struct ESCA_head *ESCA_table_p);
+int ESCA_evicted_find(struct ESCA_head *ESCA_table_p, struct ESCA_entry **np);
 void SLRU();
 struct SLRU_entry *SLRU_VPI_find(struct SLRU_head *head, int VPI);
 
@@ -183,10 +183,10 @@ void FIFO()
 void ESCA()
 {
     struct ESCA_head ESCA_table;
-    TAILQ_INIT(&ESCA_table);
+    CIRCLEQ_INIT(&ESCA_table);
     char input[20], method[10];
     int VPI, DPI_d, DPI_s, evicted_VPI, in_use_PF[PF_size], count = 0, miss = 0, i;
-    struct ESCA_entry *n;
+    struct ESCA_entry *n, *round_n = NULL;
     for(i = 0; i < PF_size; ++i)
         in_use_PF[i] = -1;  // not used
 
@@ -217,19 +217,19 @@ void ESCA()
                         if(strcmp(method, "Write") == 0)
                             n->dirty = 1;
                         else n->dirty = 0;
-                        TAILQ_INSERT_TAIL(&ESCA_table, n, ESCA_entries);
+                        CIRCLEQ_INSERT_TAIL(&ESCA_table, n, ESCA_entries);
                         break;
                     }
                 }
                 if(page_table[VPI].present == 0)    // physical memory full
                 {
-                    evicted_VPI = ESCA_evicted_find(&ESCA_table);
+                    evicted_VPI = ESCA_evicted_find(&ESCA_table, &round_n);
                     page_table[VPI].present = 1;
                     page_table[VPI].index = page_table[evicted_VPI].index;
                     DPI_d = vacant_DPI();
                     page_table[evicted_VPI].present = 0;
                     page_table[evicted_VPI].index = DPI_d;
-                    for(n = ESCA_table.tqh_first; n != NULL; n = n->ESCA_entries.tqe_next)
+                    for(n = ESCA_table.cqh_first; n != NULL; n = n->ESCA_entries.cqe_next)
                     {
                         if(n->VPI == evicted_VPI)
                         {
@@ -250,7 +250,7 @@ void ESCA()
             {
                 if(page_table[VPI].present == 1)   // present
                 {
-                    for(n = ESCA_table.tqh_first; n != NULL; n = n->ESCA_entries.tqe_next)
+                    for(n = ESCA_table.cqh_first; n != NULL; n = n->ESCA_entries.cqe_next)
                     {
                         if(n->VPI == VPI)
                         {
@@ -265,14 +265,14 @@ void ESCA()
                 }
                 else    // not present
                 {
-                    evicted_VPI = ESCA_evicted_find(&ESCA_table);
+                    evicted_VPI = ESCA_evicted_find(&ESCA_table, &round_n);
                     DPI_s = page_table[VPI].index;
                     DPI_d = vacant_DPI();
                     page_table[VPI].present = 1;
                     page_table[VPI].index = page_table[evicted_VPI].index;
                     page_table[evicted_VPI].present = 0;
                     page_table[evicted_VPI].index = DPI_d;
-                    for(n = ESCA_table.tqh_first; n != NULL; n = n->ESCA_entries.tqe_next)
+                    for(n = ESCA_table.cqh_first; n != NULL; n = n->ESCA_entries.cqe_next)
                     {
                         if(n->VPI == evicted_VPI)
                         {
@@ -295,26 +295,42 @@ void ESCA()
         for(int j = 0; j < VP_size; j++)
             fprintf(stderr, "%d: %d %d %d\n", j, page_table[j].index, page_table[j].in_use, page_table[j].present);
         fprintf(stderr, "ESCA queue:\n");
-        for(struct ESCA_entry *n2 = ESCA_table.tqh_first; n2 != NULL; n2 = n2->ESCA_entries.tqe_next)
+        for(struct ESCA_entry *n2 = ESCA_table.cqh_first; n2 != NULL; n2 = n2->ESCA_entries.cqe_next)
             fprintf(stderr, "%d: %d %d\n", n2->VPI, n2->ref, n2->dirty);*/
     }
     printf("Page Fault Rate: %.3f", (float)miss/count);
 }
-int ESCA_evicted_find(struct ESCA_head *ESCA_table_p)
+int ESCA_evicted_find(struct ESCA_head *ESCA_table_p, struct ESCA_entry **np)
 {
-    struct ESCA_entry *n;
+    if(*np != NULL)
+        *np = (*np)->ESCA_entries.cqe_next; // start searching from next node
+    else *np = ESCA_table_p->cqh_first; // *np is NULL first time
+    if(*np == (void *)ESCA_table_p)
+        *np = ((struct ESCA_head *)*np)->cqh_first;
+    struct ESCA_entry *start = *np;
+    bool b;
     for(int i = 0; i < 2; ++i)
     {
-        for(n = ESCA_table_p->tqh_first; n != NULL; n = n->ESCA_entries.tqe_next)
+        b = 0;
+        while(*np != start || b == 0)
         {
-            if(n->ref == 0 && n->dirty == 0)
-                return n->VPI;
+            b = 1;
+            if((*np)->ref == 0 && (*np)->dirty == 0)
+                return (*np)->VPI;
+            *np = (*np)->ESCA_entries.cqe_next;
+            if(*np == (void *)ESCA_table_p)
+                *np = ((struct ESCA_head *)*np)->cqh_first;
         }
-        for(n = ESCA_table_p->tqh_first; n != NULL; n = n->ESCA_entries.tqe_next)
+        b = 0;
+        while(*np != start || b == 0)
         {
-            if(n->ref == 0 && n->dirty == 1)
-                return n->VPI;
-            n->ref = 0;
+            b = 1;
+            if((*np)->ref == 0 && (*np)->dirty == 1)
+                return (*np)->VPI;
+            (*np)->ref = 0;
+            *np = (*np)->ESCA_entries.cqe_next;
+            if(*np == (void *)ESCA_table_p)
+                *np = ((struct ESCA_head *)*np)->cqh_first;
         }
     }
     return -1;  // error occured
