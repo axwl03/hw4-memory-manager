@@ -169,14 +169,6 @@ void FIFO()
                 }
             }
         }
-        // print page table and queuehead
-        /*fprintf(stderr, "\npage table:\n");
-        for(int j = 0; j < VP_size; j++){
-          fprintf(stderr, "%d: %d %d %d\n", j, page_table[j].index, page_table[j].in_use, page_table[j].present);
-        }
-        fprintf(stderr, "queue:\n");
-        for(struct entry *n2 = queuehead.tqh_first; n2 != NULL; n2 = n2->entries.tqe_next)
-          fprintf(stderr, "%d\n", n2->index);*/
     }
     printf("Page Fault Rate: %.3f", (float)miss/count);
 }
@@ -290,13 +282,6 @@ void ESCA()
                 }
             }
         }
-        // print page table and queuehead
-        /*fprintf(stderr, "\npage table:\n");
-        for(int j = 0; j < VP_size; j++)
-            fprintf(stderr, "%d: %d %d %d\n", j, page_table[j].index, page_table[j].in_use, page_table[j].present);
-        fprintf(stderr, "ESCA queue:\n");
-        for(struct ESCA_entry *n2 = ESCA_table.cqh_first; n2 != NULL; n2 = n2->ESCA_entries.cqe_next)
-            fprintf(stderr, "%d: %d %d\n", n2->VPI, n2->ref, n2->dirty);*/
     }
     printf("Page Fault Rate: %.3f", (float)miss/count);
 }
@@ -497,16 +482,6 @@ void SLRU()
                 }
             }
         }
-        // print page table and active inactive list
-        /*fprintf(stderr, "\npage table:\n");
-        for(int j = 0; j < VP_size; j++)
-            fprintf(stderr, "%d: %d %d %d\n", j, page_table[j].index, page_table[j].in_use, page_table[j].present);
-        fprintf(stderr, "active list:\n");
-        for(n = active.tqh_first; n != NULL; n = n->SLRU_entries.tqe_next)
-            fprintf(stderr, "%d: %d\n", n->VPI, n->ref);
-        fprintf(stderr, "inactive list:\n");
-        for(n = inactive.tqh_first; n != NULL; n = n->SLRU_entries.tqe_next)
-            fprintf(stderr, "%d: %d\n", n->VPI, n->ref);*/
     }
     printf("Page Fault Rate: %.3f", (float)miss/count);
 }
